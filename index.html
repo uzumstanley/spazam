@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Song Finder</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        margin: 0;
+        background-color: #f0f0f0;
+      }
+      #logo {
+        width: 150px;
+        height: 150px;
+        background-color: #1DB954;
+        border-radius: 50%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        cursor: pointer;
+        transition: all 0.3s ease;
+      }
+      #logo img {
+        width: 80px;
+        height: 80px;
+      }
+      #logo.listening {
+        animation: pulse 1.5s infinite;
+      }
+      @keyframes pulse {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.1); }
+        100% { transform: scale(1); }
+      }
+      #status {
+        text-align: center;
+        margin-top: 20px;
+        font-size: 18px;
+      }
+      .toast {
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 10px 20px;
+        border-radius: 5px;
+        color: white;
+        font-weight: bold;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+      }
+      .toast.success { background-color: #4CAF50; }
+      .toast.error { background-color: #F44336; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="logo">
+        <img src="spazam.png" alt="Song Finder Logo" />
+      </div>
+      <div id="status"></div>
+    </div>
+    <div id="toast" class="toast"></div>
+
+    <script>
+      const logo = document.getElementById('logo');
+      const status = document.getElementById('status');
+      const toast = document.getElementById('toast');
+        const url = 'https://localhost:7142'
+      logo.addEventListener("click", async () => {
+        logo.classList.add('listening');
+        status.textContent = 'Listening...';
+
+        try {
+          let stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          let audioContext = new AudioContext();
+          let source = audioContext.createMediaStreamSource(stream);
+          let processor = audioContext.createScriptProcessor(1024, 1, 1);
+
+          source.connect(processor);
+          processor.connect(audioContext.destination);
+
+          let audioChunks = [];
+
+          processor.onaudioprocess = (e) => {
+            let inputData = e.inputBuffer.getChannelData(0);
+            audioChunks.push(new Float32Array(inputData));
+          };
+
+          // Record for 5 seconds
+          await new Promise(resolve => setTimeout(resolve, 11000));
+
+          processor.disconnect();
+          source.disconnect();
+
+          // Convert to WAV
+          let wavBlob = createWavBlob(audioChunks, audioContext.sampleRate);
+
+          let formData = new FormData();
+          formData.append("audioChunk", wavBlob, "chunk.wav");
+
+          // Upload the chunk to the server
+          let response = await fetch(`${url}/identify-chunk`, {
+            method: "POST",
+            body: formData
+          });
+
+          let result = await response.json();
+          logo.classList.remove('listening');
+          status.textContent = '';
+          console.log(result);
+          if (result.status) {
+            showToast(`Song Found: ${result.songdetails}`, 'success');
+          } else {
+            showToast('No match found for this chunk', 'error');
+          }
+
+        } catch (error) {
+          logo.classList.remove('listening');
+          status.textContent = '';
+          showToast('Error: ' + error.message, 'error');
+        }
+      });
+
+      function showToast(message, type) {
+        toast.textContent = message;
+        toast.className = `toast ${type}`;
+        toast.style.opacity = 1;
+        setTimeout(() => {
+          toast.style.opacity = 0;
+        }, 3000);
+      }
+
+      function createWavBlob(audioChunks, sampleRate) {
+        let numChannels = 1;
+        let numSamples = audioChunks.length * 1024;
+        let buffer = new ArrayBuffer(44 + numSamples * 2);
+        let view = new DataView(buffer);
+
+        // Write WAV header
+        writeString(view, 0, 'RIFF');
+        view.setUint32(4, 36 + numSamples * 2, true);
+        writeString(view, 8, 'WAVE');
+        writeString(view, 12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, numChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * 2, true);
+        view.setUint16(32, numChannels * 2, true);
+        view.setUint16(34, 16, true);
+        writeString(view, 36, 'data');
+        view.setUint32(40, numSamples * 2, true);
+
+        // Write audio data
+        let offset = 44;
+        for (let chunk of audioChunks) {
+          for (let i = 0; i < chunk.length; i++) {
+            let sample = Math.max(-1, Math.min(1, chunk[i]));
+            view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+            offset += 2;
+          }
+        }
+
+        return new Blob([buffer], { type: 'audio/wav' });
+      }
+
+      function writeString(view, offset, string) {
+        for (let i = 0; i < string.length; i++) {
+          view.setUint8(offset + i, string.charCodeAt(i));
+        }
+      }
+    </script>
+  </body>
+</html>
