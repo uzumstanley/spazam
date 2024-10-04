@@ -1,0 +1,6 @@
+@ShazamRemake_HostAddress = http://localhost:5242
+
+GET {{ShazamRemake_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
